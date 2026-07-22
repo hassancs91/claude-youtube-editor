@@ -23,6 +23,7 @@ accumulation.
 import argparse
 import json
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 from pathlib import Path
@@ -31,19 +32,31 @@ from cutlib import AudioProbe, active_keeps, load_words, plan_clip
 
 SR = 48000  # audio build sample rate
 
-ENC = {
-    "preview": ["-vf", "scale=1280:-2,format=yuv420p", "-c:v", "h264_nvenc", "-preset", "p4",
-                "-rc", "vbr", "-cq", "30", "-b:v", "0"],
-    "final": ["-c:v", "hevc_nvenc", "-preset", "p5", "-profile:v", "main10",
-              "-pix_fmt", "p010le", "-rc", "vbr", "-cq", "19", "-b:v", "0"],
-}
+# Encoder is platform-aware: Apple VideoToolbox on macOS, NVIDIA NVENC elsewhere.
+# Same output shape either way (preview 720p H.264, final 4K60 10-bit HEVC).
+if sys.platform == "darwin":
+    HWACCEL = ["-hwaccel", "videotoolbox"]
+    ENC = {
+        "preview": ["-vf", "scale=1280:-2,format=yuv420p", "-c:v", "h264_videotoolbox",
+                    "-b:v", "5M"],
+        "final": ["-c:v", "hevc_videotoolbox", "-profile:v", "main10",
+                  "-pix_fmt", "p010le", "-b:v", "40M", "-tag:v", "hvc1"],
+    }
+else:
+    HWACCEL = ["-hwaccel", "cuda"]
+    ENC = {
+        "preview": ["-vf", "scale=1280:-2,format=yuv420p", "-c:v", "h264_nvenc", "-preset", "p4",
+                    "-rc", "vbr", "-cq", "30", "-b:v", "0"],
+        "final": ["-c:v", "hevc_nvenc", "-preset", "p5", "-profile:v", "main10",
+                  "-pix_fmt", "p010le", "-rc", "vbr", "-cq", "19", "-b:v", "0"],
+    }
 AUDIO_BITRATE = {"preview": "160k", "final": "256k"}
 
 
 def render_segment(src: Path, seg: tuple[float, float], out: Path, enc: list[str]) -> None:
     start, end = seg
     dur = end - start
-    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-hwaccel", "cuda",
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", *HWACCEL,
            "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(src),
            "-map", "0:0", "-an", *enc, str(out)]
     subprocess.run(cmd, check=True)
@@ -154,6 +167,7 @@ def main() -> None:
     # single mux: copied video + one continuous AAC encode
     out_name = f"{'preview' if args.mode == 'preview' else 'master'}-{args.style}.mp4"
     out_path = project / "output" / out_name
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
                     "-i", str(video_concat), "-i", str(audio_concat),
                     "-map", "0:v", "-map", "1:a", "-c:v", "copy",
