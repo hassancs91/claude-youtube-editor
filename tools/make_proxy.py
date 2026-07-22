@@ -12,11 +12,20 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
+# Encoder is platform-aware: Apple VideoToolbox on macOS, NVIDIA NVENC elsewhere.
+if sys.platform == "darwin":
+    _HWACCEL = ["-hwaccel", "videotoolbox"]
+    _VENC = ["-c:v", "h264_videotoolbox", "-b:v", "5M"]
+else:
+    _HWACCEL = ["-hwaccel", "cuda"]
+    _VENC = ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "29", "-b:v", "0"]
+
+
 def encode_part(src: Path, out: Path) -> None:
     subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-hwaccel", "cuda", "-i", str(src),
+        ["ffmpeg", "-y", "-loglevel", "error", *_HWACCEL, "-i", str(src),
          "-map", "0:0", "-map", "0:1", "-vf", "scale=1280:-2,format=yuv420p",
-         "-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "29", "-b:v", "0",
+         *_VENC,
          "-c:a", "aac", "-b:a", "160k", str(out)],
         check=True,
     )

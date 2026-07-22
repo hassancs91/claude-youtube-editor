@@ -23,6 +23,7 @@ accumulation.
 import argparse
 import json
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 from pathlib import Path
@@ -31,19 +32,58 @@ from cutlib import AudioProbe, active_keeps, load_words, plan_clip
 
 SR = 48000  # audio build sample rate
 
-ENC = {
-    "preview": ["-vf", "scale=1280:-2,format=yuv420p", "-c:v", "h264_nvenc", "-preset", "p4",
-                "-rc", "vbr", "-cq", "30", "-b:v", "0"],
-    "final": ["-c:v", "hevc_nvenc", "-preset", "p5", "-profile:v", "main10",
-              "-pix_fmt", "p010le", "-rc", "vbr", "-cq", "19", "-b:v", "0"],
-}
+# Encoder is platform-aware: Apple VideoToolbox on macOS, NVIDIA NVENC elsewhere.
+# Same output shape either way (preview 720p H.264, final 4K60 10-bit HEVC).
+if sys.platform == "darwin":
+    HWACCEL = ["-hwaccel", "videotoolbox"]
+    _PREVIEW_ENC = ["-vf", "scale=1280:-2,format=yuv420p", "-c:v", "h264_videotoolbox",
+                    "-b:v", "5M"]
+else:
+    HWACCEL = ["-hwaccel", "cuda"]
+    _PREVIEW_ENC = ["-vf", "scale=1280:-2,format=yuv420p", "-c:v", "h264_nvenc", "-preset", "p4",
+                    "-rc", "vbr", "-cq", "30", "-b:v", "0"]
+
 AUDIO_BITRATE = {"preview": "160k", "final": "256k"}
+
+
+def _videotoolbox_hevc_main10_ok() -> bool:
+    """Whether this Mac can hardware-encode 10-bit HEVC via VideoToolbox.
+    Older / Intel Macs may list the encoder yet fail main10 at compression-
+    session create time (VT error -12908) with NO automatic software fallback,
+    which would abort the whole render. Probe with a throwaway 1-frame encode."""
+    r = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error",
+         "-f", "lavfi", "-i", "color=c=black:s=256x256:d=1",
+         "-c:v", "hevc_videotoolbox", "-profile:v", "main10", "-pix_fmt", "p010le",
+         "-frames:v", "1", "-f", "null", "-"],
+        capture_output=True)
+    return r.returncode == 0
+
+
+def final_enc() -> list[str]:
+    """4K60 10-bit HEVC, tagged hvc1 for QuickTime/Safari. On macOS, fall back to
+    software libx265 when the VideoToolbox HEVC main10 path isn't supported so the
+    render never aborts on hardware that can't do hardware 10-bit HEVC."""
+    if sys.platform == "darwin":
+        if _videotoolbox_hevc_main10_ok():
+            return ["-c:v", "hevc_videotoolbox", "-profile:v", "main10",
+                    "-pix_fmt", "p010le", "-b:v", "40M", "-tag:v", "hvc1"]
+        print("hevc_videotoolbox main10 unavailable on this Mac "
+              "-> falling back to software libx265")
+        return ["-c:v", "libx265", "-profile:v", "main10", "-pix_fmt", "p010le",
+                "-crf", "18", "-tag:v", "hvc1"]
+    return ["-c:v", "hevc_nvenc", "-preset", "p5", "-profile:v", "main10",
+            "-pix_fmt", "p010le", "-rc", "vbr", "-cq", "19", "-b:v", "0"]
+
+
+def enc_for(mode: str) -> list[str]:
+    return _PREVIEW_ENC if mode == "preview" else final_enc()
 
 
 def render_segment(src: Path, seg: tuple[float, float], out: Path, enc: list[str]) -> None:
     start, end = seg
     dur = end - start
-    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-hwaccel", "cuda",
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", *HWACCEL,
            "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(src),
            "-map", "0:0", "-an", *enc, str(out)]
     subprocess.run(cmd, check=True)
@@ -100,8 +140,9 @@ def main() -> None:
     seg_dir.mkdir(parents=True, exist_ok=True)
     outs = [seg_dir / f"seg_{i:03d}.mp4" for i in range(len(jobs))]
 
+    enc = enc_for(args.mode)  # resolve once (probes VideoToolbox on macOS)
     with ThreadPoolExecutor(max_workers=3) as pool:
-        futs = [pool.submit(render_segment, src, seg, out, ENC[args.mode])
+        futs = [pool.submit(render_segment, src, seg, out, enc)
                 for (src, seg), out in zip(jobs, outs)]
         for i, f in enumerate(futs):
             f.result()
@@ -154,9 +195,13 @@ def main() -> None:
     # single mux: copied video + one continuous AAC encode
     out_name = f"{'preview' if args.mode == 'preview' else 'master'}-{args.style}.mp4"
     out_path = project / "output" / out_name
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    # The per-segment hvc1 tag is dropped at the TS remux, so re-apply it on the
+    # delivered HEVC mux: mp4 defaults to hev1, which QuickTime/Safari won't play.
+    tag = ["-tag:v", "hvc1"] if args.mode == "final" else []
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
                     "-i", str(video_concat), "-i", str(audio_concat),
-                    "-map", "0:v", "-map", "1:a", "-c:v", "copy",
+                    "-map", "0:v", "-map", "1:a", "-c:v", "copy", *tag,
                     "-c:a", "aac", "-b:a", AUDIO_BITRATE[args.mode],
                     str(out_path)], check=True)
     print(f"wrote {out_path}")
