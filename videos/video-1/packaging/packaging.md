@@ -293,7 +293,7 @@ the ANY AI claim** and remains the one unresolved honesty flag in the set.
 
 Same lever as A: Hasan at his desk, cable from the laptop into his temple, Claude spark on
 the screen (real ref: `media/library/logos/claude-1024.png`, rasterized from `claude.svg`).
-v2 restyled to the creator's own before/after thumbnail guide (`Image 13.png`, repo root):
+v2 restyled to the creator's own before/after thumbnail guide (the "Image 13" guide, not in the repo):
 dark high-contrast frame, green energy glow + green rim light, tiered grunge headline
 ("MY BRAIN" / "PLUGGED IN"), yellow "100% FREE!" sticker with red underline + arrow, bottom
 checkstrip (MY VOICE / MY DATA / ANY AI), green brush tag "WITH CLAUDE". This deliberately

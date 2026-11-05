@@ -16,6 +16,15 @@ remotion/out/
 remotion/src/registry.gen.tsx
 remotion/src/shots.manifest.json
 
+# tool scratch + logs (regenerated on every run): make_stems.py's filter graphs, the ffmpeg
+# concat list make_proxy.py writes next to the editor proxies, redirected tool output
+/.stems_tmp/
+videos/*/work/editor/list.txt
+*.log
+# stray recordings and pasted screenshots at the repo root (media belongs in media/ or videos/)
+/*.m4a
+/Image *.png
+
 # ── RAW FOOTAGE & MASTER CUTS ──────────────────────────────────────────────
 # Camera files and their master exports NEVER go to GitHub. The repo carries the
 # reproducible pipeline (cuts.json, transcripts, plans, shots), not the footage.
