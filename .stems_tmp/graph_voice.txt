@@ -1,1 +1,0 @@
-[0:a]aformat=sample_rates=48000:channel_layouts=stereo[mix]

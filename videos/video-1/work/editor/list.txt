@@ -1,7 +1,0 @@
-file 'D:/repos/claude-youtube-editor/videos/video-1/work/editor/part-0258.mp4'
-file 'D:/repos/claude-youtube-editor/videos/video-1/work/editor/part-0259.mp4'
-file 'D:/repos/claude-youtube-editor/videos/video-1/work/editor/part-0260.mp4'
-file 'D:/repos/claude-youtube-editor/videos/video-1/work/editor/part-0261.mp4'
-file 'D:/repos/claude-youtube-editor/videos/video-1/work/editor/part-0262.mp4'
-file 'D:/repos/claude-youtube-editor/videos/video-1/work/editor/part-0263.mp4'
-file 'D:/repos/claude-youtube-editor/videos/video-1/work/editor/part-0264.mp4'

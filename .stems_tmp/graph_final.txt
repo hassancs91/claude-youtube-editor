@@ -1,1 +1,0 @@
-[1:a]aformat=sample_rates=48000:channel_layouts=stereo[t1];[2:a]aformat=sample_rates=48000:channel_layouts=stereo[t2];[3:a]aformat=sample_rates=48000:channel_layouts=stereo[t3];[t1][t2][t3]amix=inputs=3:normalize=0:dropout_transition=0[sum];[sum]alimiter=level_in=1:level_out=1:limit=0.79:level=disabled:latency=true[mix]

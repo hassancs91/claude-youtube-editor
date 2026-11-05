@@ -8,6 +8,7 @@
 # Also required on PATH (not pip): ffmpeg + ffprobe, and Node.js (for the Remotion render step).
 
 requests                  # transcribe.py
+numpy                     # scan_flicker.py, cutout.py
 Pillow                    # gen_thumbnail.py (image handling)
 google-genai              # gen_thumbnail.py (Gemini / Nano Banana Pro)
 

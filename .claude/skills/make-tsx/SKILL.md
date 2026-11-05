@@ -15,7 +15,8 @@ This is the project orchestration. For the low-level rules of writing a single c
 - **`videos/video-N/work/timeline.json`** — maps each shot → its span on the master + `type`. You edit this. (Schema below.)
 - **`videos/video-N/work/edited-transcript.json`** — word-level times in master timeline (ms). **Everything syncs to these.**
 - **`brand.md`** — colors/fonts/motion/delivery tokens. Every shot reads the brand so all videos feel like one channel.
-- **`remotion/src/lib/kit.tsx`** (+ `lib/vscode.tsx`, `lib/browser.tsx`) — the reusable component library; `src/brand.ts`, `src/fonts.ts`; existing shots in `remotion/src/shots/video-N/`.
+- **[`references/review-rules.md`](references/review-rules.md)** — the standing rules the creator's Studio reviews produced: the Studio-first review loop, the story layer (generated images, not icons; PiP in evidence beats), realistic dev tools, spacing, honesty, the generated-image recipe, and channel-specific pieces. **Read it every session.** Apply it before the creator has to repeat a note.
+- **`remotion/src/lib/kit.tsx`** (+ `lib/vscode.tsx`, `lib/browser.tsx`, `lib/screencast.tsx`, and every piece you add to `lib/`) — the reusable component library; `src/brand.ts`, `src/fonts.ts`; existing shots in `remotion/src/shots/video-N/`.
 
 ## Workflow
 
@@ -25,7 +26,8 @@ This is the project orchestration. For the low-level rules of writing a single c
 4. **Author / edit the shot** as a vidtsx-format `.tsx` in `remotion/src/shots/video-N/` (auto-registered by `scripts/gen-registry.mjs`). One shot per file. Follow the brand tokens and the principles below.
 5. **Sync to the words** (see principles). Time each sub-element's entrance to its transcript cue; never show a thing before it's said or after the point has passed.
 6. **Update `timeline.json`** — add/replace/retime the beat's span and `type`. Leave a clear note when a slot is a placeholder (e.g. a pending screen recording).
-7. **Render + VERIFY BY SCREENSHOT** (never skip): `cd remotion && node scripts/render-all.mjs --scale=1 <ShotIds>` (opaque → `out/<id>.mp4`, transparent overlays → `.mov`). Validate with a still first (`--still`); for word-synced reveals/scrolls, render the clip and pull a frame at **each cue** (`ffmpeg -ss <t> -i out/<id>.mp4 -frames:v 1 f.jpg`) — one 60% still is not enough.
+7. **Studio first, until the beats are locked** (review-rules §1). Register the shot (`npm run gen`), add it to the act's Studio assembly comp, and QA it with stills at every cue and on both sides of every cut: `node remotion/scripts/qa-frames.mjs <Comp> --out <scratch> name=frame ...`, read on a contact sheet. Hand it over for review in `npm run studio`. Do NOT render video or bake while the creator is still giving notes.
+   **After the lock, render + VERIFY BY SCREENSHOT** (never skip): `cd remotion && node scripts/render-all.mjs --scale=1 <ShotIds>` (opaque → `out/<id>.mp4`, transparent overlays → `.mov`). Validate with a still first (`--still`); for word-synced reveals/scrolls, render the clip and pull a frame at **each cue** (`ffmpeg -ss <t> -i out/<id>.mp4 -frames:v 1 f.jpg`) — one 60% still is not enough.
 8. **Bake the preview**: `python tools/bake.py` (reads timeline.json → `videos/video-N/output/video-N-preview.mp4`, 1080p30). `--end SECONDS` to bake a prefix while iterating.
 9. **Spot-check composited frames** from the baked mp4 at the changed beats (the shot over the real master), not just the isolated shot.
 
@@ -59,8 +61,10 @@ This is the project orchestration. For the low-level rules of writing a single c
 - **Recording vs TSX.** TSX when you want controlled highlight/scroll/zoom; a real screen recording only when the point is genuine PROOF (real output, real speed). Leave a clearly-noted placeholder slot for recordings the user will provide.
 - On-screen text follows the brand voice — **no em-dashes** (the site copy avoids them; keep it out of overlays too).
 
-Those are the full principle set. When a video's plan calls for a revision pass, record what changed
-and why in `videos/<project>/work/v2-update-plan.md` so the next pass inherits the reasoning.
+These principles are extended by **[`references/review-rules.md`](references/review-rules.md)**, which
+wins where it is more specific. Record each review round in `videos/<project>/work/edit-plan-act<K>.md`
+(or `v2-update-plan.md` for a single-plan video), so the next pass inherits the reasoning. When a
+review produces a rule that should outlive the video, add it to `review-rules.md` with its reason.
 
 ## Tooling quick reference
 
@@ -69,4 +73,4 @@ and why in `videos/<project>/work/v2-update-plan.md` so the next pass inherits t
 - Bake: `python tools/bake.py [timeline.json] [--end S] [--keep]`.
 - Scratch renders/frames go in the scratchpad, not the project.
 
-Done = the changed beats render, you have **looked at** stills/frames at each cue, the preview is re-baked, and composited frames are spot-checked. Update the plan/timeline and any relevant memory when the pass is complete.
+Done (while iterating) = the changed beats are in the Studio comp, you have **looked at** stills at each cue and at every cut, the round is logged in the act's plan, and the timeline notes are updated. Done (after the lock) = the beats render, the preview is re-baked, and composited frames are spot-checked. Promote any new standing rule to `references/review-rules.md`.

@@ -1,1 +1,0 @@
-[0:a][1:a][2:a][3:a]amix=inputs=4:normalize=0:dropout_transition=0[mix]
