@@ -77,6 +77,13 @@ Translated to video (Remotion, 60fps):
 - **Stagger:** 3–4 frames between list items / lines.
 - **Backgrounds:** slow drifting indigo/violet/teal gradient blobs + a faint dotted grid, 8–20s loops.
 - **Feel:** premium, restrained, "Linear/Anthropic." No spins, no elastic, no hard snaps.
+- **Transitions between beats** (`timeline.json`, rendered by `tools/bake.py`): **hard cut by default**
+  — a transition has to mark something (a new section, entering/leaving a concept cutaway, a reveal).
+  The everyday set is `fade` (0.25–0.35s, cutaway in/out) and `dip` to `#0d1117` (0.4–0.5s, section
+  changes). `blur` for a softer cutaway entry. `slide`/`wipe`/`zoom`/`circle` are louder: at most a
+  section-change motif, used the same way every time. **One transition family per video**, always
+  short (0.2–0.5s), never on a shot whose own camera is already moving, and never across a punchline
+  (cut back to the face hard). A transition that gets a sound gets `whoosh-soft` on the join (§10).
 
 **Hook-beat exception (first ~10s + intro cutaways — video-5 creator feedback).** The opening
 sequence runs HOTTER than the body: branded app-UI spectacle (e.g. the Claude Editor shell) with

@@ -21,6 +21,22 @@ bakes a flat preview:
     in the OUTPUT. Total output = preview.end_s + sum of insert durations;
   - everywhere else the master video passes through.
 
+TRANSITIONS (between a beat and whatever is on screen next to it). Every join is a
+hard cut unless the shot asks for one. Per shot, optional:
+    "transition_in":  "fade"                         (at master_in_s)
+    "transition_out": {"type": "dip", "dur_s": 0.5}  (at master_out_s)
+and optionally a timeline-wide default for cutaway/split joins:
+    "transitions": {"default": "fade", "dip_color": "#0d1117"}
+"cut" (or null) forces a hard cut. At a join both shots name, the INCOMING shot's
+transition_in wins. Types (default seconds): fade 0.30 · dip 0.40 (out to dip_color,
+in from it) · blur 0.30 · zoom 0.35 · slide-left/right/up/down 0.35 ·
+wipe-left/right/up/down 0.35 · circle 0.45 · "xfade:<name>" for any ffmpeg xfade
+transition. The window is CENTERED on the join and frame-exact, so no beat moves
+and the audio is untouched: the outgoing side holds its last frame for the second
+half, the incoming side holds its first frame for the first half. A window is
+clamped to half of each neighbouring segment. Overlays fade themselves in their
+TSX (the default skips them), and inserts always hard-cut.
+
 Method: split [0, end] into atomic segments at every shot boundary, render each
 segment to an identically-encoded clip, concat them, then mux master audio 0..end.
 Frame-accurate: per-segment frame counts come from rounded cumulative boundaries so
@@ -43,6 +59,40 @@ def proj(p):
     WORKING DIR — i.e. the type workspace you run from (longs/), where video-N lives — NOT
     relative to ROOT (=core/, the shared engine). Engine/library paths still use ROOT."""
     return p if os.path.isabs(p) else os.path.abspath(p)
+
+
+# transition name -> (ffmpeg xfade transition, or "dip"; default duration in seconds).
+# Calm/premium first (brand §6): fade, dip and blur are the everyday set; the rest earn their place.
+TRANSITIONS = {
+    "fade": ("fade", 0.30),
+    "dip": ("dip", 0.40),
+    "blur": ("hblur", 0.30),
+    "zoom": ("zoomin", 0.35),
+    "circle": ("circleopen", 0.45),
+    **{f"slide-{d}": (f"slide{d}", 0.35) for d in ("left", "right", "up", "down")},
+    **{f"wipe-{d}": (f"wipe{d}", 0.35) for d in ("left", "right", "up", "down")},
+}
+LOSSLESS = ["-c:v", "libx264", "-qp", "0", "-preset", "ultrafast"]  # transition A/B intermediates
+
+
+def parse_transition(spec, where, dip_color):
+    """A transition spec -> {name, kind, dur, color}, or None for a hard cut."""
+    if spec is None or spec == "cut":
+        return None
+    if isinstance(spec, str):
+        spec = {"type": spec}
+    name = spec.get("type", "cut")
+    if name == "cut":
+        return None
+    if name.startswith("xfade:"):
+        kind, dur = name[len("xfade:"):], 0.30
+    elif name in TRANSITIONS:
+        kind, dur = TRANSITIONS[name]
+    else:
+        raise SystemExit(f"unknown transition '{name}' on {where}. Use one of: cut, "
+                         f"{', '.join(TRANSITIONS)}, or xfade:<ffmpeg xfade name>")
+    return {"name": name, "kind": kind, "dur": float(spec.get("dur_s", dur)),
+            "color": spec.get("color", dip_color)}
 
 
 def run(cmd):
@@ -106,7 +156,8 @@ def main():
         shots.append({"id": s["id"], "type": s["type"], "in": a, "out": b, "file": f,
                       "box": s.get("master_box"), "cx": float(s.get("master_crop_cx", 0.5)),
                       "cy": float(s.get("master_crop_cy", 0.5)),
-                      "zoom": max(1.0, float(s.get("master_crop_zoom", 1.0)))})
+                      "zoom": max(1.0, float(s.get("master_crop_zoom", 1.0))),
+                      "raw": s})
 
     inserts.sort(key=lambda i: i["at"])
     cutaways = [s for s in shots if s["type"] == "cutaway"]
@@ -115,6 +166,22 @@ def main():
     for s in splits:
         if not s["box"]:
             raise SystemExit(f"split shot {s['id']} needs a master_box {{x,y,w,h}} in timeline.json")
+
+    # transitions: frame of the join -> spec. Defaults first, then explicit outs, then
+    # explicit ins (so the incoming shot wins a join both sides name).
+    tcfg = tl.get("transitions") or {}
+    dip_color = tcfg.get("dip_color", "black")
+    joins = {}
+    for s in shots:
+        if s["type"] in ("cutaway", "split") and tcfg.get("default"):
+            for t in (s["in"], s["out"]):
+                joins[round(t * FPS)] = (parse_transition(tcfg["default"], f"default @{t:.2f}", dip_color), t)
+    for key, edge in (("transition_out", "out"), ("transition_in", "in")):
+        for s in shots:
+            if key in s["raw"]:
+                joins[round(s[edge] * FPS)] = (parse_transition(s["raw"][key], f"{s['id']}.{key}", dip_color), s[edge])
+    end_f = round(END * FPS)
+    joins = {f: j for f, j in joins.items() if j[0] and 0 < f < end_f}
 
     # atomic segment boundaries (insert points are boundaries too: the insert
     # clip is injected between the segment ending at `at` and the one resuming there)
@@ -125,6 +192,41 @@ def main():
     for ins in inserts:
         bounds.add(ins["at"])
     bounds = sorted(b for b in bounds if 0.0 <= b <= END)
+
+    def state_at(t):
+        """What is on screen at master time t: (kind, shot). split > cutaway > overlay > master."""
+        for kind, group in (("split", splits), ("cutaway", cutaways), ("overlay", overlays)):
+            s = next((s for s in group if s["in"] <= t + 1e-6 and t < s["out"] - 1e-6), None)
+            if s:
+                return kind, s
+        return "master", None
+
+    # each transition becomes a window [join-h, join+h] (frames), clamped to half of each
+    # neighbouring segment so two windows never overlap
+    bframes = sorted({round(b * FPS) for b in bounds})
+    insert_frames = {round(i["at"] * FPS) for i in inserts}
+    windows = {}  # window start frame -> (join frame, half, spec, join time)
+    for f, (tr, t0) in sorted(joins.items()):
+        if state_at(t0 - 1e-3) == state_at(t0 + 1e-3):
+            continue  # nothing changes on screen here (e.g. a split ending into a split)
+        if f in insert_frames:
+            print(f"  note: {tr['name']} at {f / FPS:.2f}s skipped (an insert sits on that join)")
+            continue
+        if f not in bframes:
+            continue
+        k = bframes.index(f)
+        room = min((f - bframes[k - 1]) // 2, (bframes[k + 1] - f) // 2)
+        h = min(round(tr["dur"] * FPS / 2), room)
+        if h < round(tr["dur"] * FPS / 2):
+            print(f"  note: {tr['name']} at {f / FPS:.2f}s shortened to {2 * h / FPS:.2f}s (neighbouring beat is short)")
+        if h >= 1:
+            windows[f - h] = (f, h, tr, t0)
+    # the window replaces the join: [join-h, join+h] is ONE segment
+    joined = {w[0] for w in windows.values()}
+    bounds = [b for b in bounds if round(b * FPS) not in joined]
+    for start, (f, h, _tr, _t0) in windows.items():
+        bounds += [start / FPS, (f + h) / FPS]
+    bounds = sorted(set(bounds))
 
     scratch = os.path.join(os.path.dirname(out_path), "_bake_tmp")
     if os.path.exists(scratch):
@@ -145,6 +247,82 @@ def main():
              "-frames:v", str(n_ins), "-an", *VSEG, "-pix_fmt", "yuv420p", seg])
         seg_files.append(seg)
 
+    def render_state(state, a, n, seg, venc):
+        """Render n frames of `state` starting at master time a. A shot asked for frames
+        before its in-point (an incoming transition) holds its first frame; past its end,
+        its last frame."""
+        kind, s = state
+        pad = "stop_mode=clone:stop_duration=2"
+        if s:
+            off = max(0.0, a - s["in"])
+            lead = max(0.0, s["in"] - a)
+            if lead > 1e-6:
+                pad = f"start_mode=clone:start_duration={lead:.4f}:" + pad
+        common_vf = f"scale={W}:{H}:force_original_aspect_ratio=disable,fps={FPS},tpad={pad},format=yuv420p"
+        mpad = "tpad=stop_mode=clone:stop_duration=2"
+        if kind == "split":
+            label = f"split:{s['id']} @+{off:.2f}s"
+            # design-space (1920x1080) box -> output px
+            box = s["box"]
+            bx, by = round(box["x"] * W / 1920), round(box["y"] * H / 1080)
+            bw, bh = round(box["w"] * W / 1920), round(box["h"] * H / 1080)
+            bw, bh = bw - bw % 2, bh - bh % 2
+            asp = bw / bh
+            zm = s["zoom"]
+            crop = (f"crop=w='min(iw,ih*{asp:.6f})/{zm:.4f}':h='min(ih,iw/{asp:.6f})/{zm:.4f}'"
+                    f":x='clip({s['cx']:.4f}*iw-ow/2,0,iw-ow)':y='clip({s['cy']:.4f}*ih-oh/2,0,ih-oh)'")
+            fc = (f"color=c=black:s={W}x{H}:r={FPS}[bg];"
+                  f"[0:v]{crop},scale={bw}:{bh},fps={FPS},format=yuv420p[pip];"
+                  f"[bg][pip]overlay={bx}:{by}[base];"
+                  f"[1:v]scale={W}:{H},fps={FPS},tpad={pad}[ov];"
+                  f"[base][ov]overlay=0:0:format=auto,{mpad},format=yuv420p[v]")
+            cmd = ["ffmpeg", "-y", "-ss", f"{a:.4f}", "-i", master,
+                   "-ss", f"{off:.4f}", "-i", s["file"],
+                   "-filter_complex", fc, "-map", "[v]", "-frames:v", str(n), "-an",
+                   *venc, "-pix_fmt", "yuv420p", seg]
+        elif kind == "cutaway":
+            label = f"cutaway:{s['id']} @+{off:.2f}s"
+            cmd = ["ffmpeg", "-y", "-ss", f"{off:.4f}", "-i", s["file"],
+                   "-vf", common_vf, "-frames:v", str(n), "-an",
+                   *venc, "-pix_fmt", "yuv420p", seg]
+        elif kind == "overlay":
+            label = f"master+overlay:{s['id']} @+{off:.2f}s"
+            fc = (f"[0:v]scale={W}:{H},fps={FPS},format=yuv420p[bg];"
+                  f"[1:v]scale={W}:{H},fps={FPS},tpad={pad}[ov];"
+                  f"[bg][ov]overlay=0:0:format=auto,{mpad},format=yuv420p[v]")
+            cmd = ["ffmpeg", "-y", "-ss", f"{a:.4f}", "-i", master,
+                   "-ss", f"{off:.4f}", "-i", s["file"],
+                   "-filter_complex", fc, "-map", "[v]", "-frames:v", str(n), "-an",
+                   *venc, "-pix_fmt", "yuv420p", seg]
+        else:
+            label = "master"
+            cmd = ["ffmpeg", "-y", "-ss", f"{a:.4f}", "-i", master,
+                   "-vf", common_vf, "-frames:v", str(n), "-an",
+                   *venc, "-pix_fmt", "yuv420p", seg]
+        run(cmd)
+        return label
+
+    def render_transition(f, h, tr, t0, a, n, seg):
+        """Both sides of the join over the whole window, then blended by the transition."""
+        before, after = state_at(t0 - 1e-3), state_at(t0 + 1e-3)
+        sa, sb = os.path.join(scratch, f"{os.path.basename(seg)}.A.mp4"), os.path.join(scratch, f"{os.path.basename(seg)}.B.mp4")
+        la = render_state(before, a, n, sa, LOSSLESS)
+        lb = render_state(after, a, n, sb, LOSSLESS)
+        norm = f"fps={FPS},settb=AVTB,format=yuv420p"
+        if tr["kind"] == "dip":
+            fc = (f"[0:v]{norm},trim=end_frame={h},fade=t=out:s=0:n={h}:color={tr['color']}[a];"
+                  f"[1:v]{norm},trim=start_frame={h},setpts=PTS-STARTPTS,fade=t=in:s=0:n={n - h}:color={tr['color']}[b];"
+                  f"[a][b]concat=n=2:v=1:a=0,format=yuv420p[v]")
+        else:
+            fc = (f"[0:v]{norm}[a];[1:v]{norm}[b];"
+                  f"[a][b]xfade=transition={tr['kind']}:duration={(n - 1) / FPS:.4f}:offset=0,format=yuv420p[v]")
+        run(["ffmpeg", "-y", "-i", sa, "-i", sb, "-filter_complex", fc, "-map", "[v]",
+             "-frames:v", str(n), "-an", *VSEG, "-pix_fmt", "yuv420p", seg])
+        os.remove(sa)
+        os.remove(sb)
+        return f"{tr['name']} {n / FPS:.2f}s  {la}  ->  {lb}"
+
+    transitions_done = []
     for i in range(len(bounds) - 1):
         a, b = bounds[i], bounds[i + 1]
         for ins in inserts:
@@ -156,63 +334,19 @@ def main():
         n = round(b * FPS) - round(a * FPS)
         if n <= 0:
             continue
-        dur = n / FPS
         seg = os.path.join(scratch, f"seg_{i:03d}.mp4")
-
-        cut = next((c for c in cutaways if c["in"] <= a + 1e-6 and a < c["out"] - 1e-6), None)
-        ov = next((o for o in overlays if o["in"] <= a + 1e-6 and b <= o["out"] + 1e-6), None)
-        sp_ = next((s for s in splits if s["in"] <= a + 1e-6 and a < s["out"] - 1e-6), None)
-
-        common_vf = f"scale={W}:{H}:force_original_aspect_ratio=disable,fps={FPS},tpad=stop_mode=clone:stop_duration=1,format=yuv420p"
-
-        if sp_:
-            off = a - sp_["in"]
-            kind = f"split:{sp_['id']} @+{off:.2f}s"
-            # design-space (1920x1080) box -> output px
-            box = sp_["box"]
-            bx, by = round(box["x"] * W / 1920), round(box["y"] * H / 1080)
-            bw, bh = round(box["w"] * W / 1920), round(box["h"] * H / 1080)
-            bw, bh = bw - bw % 2, bh - bh % 2
-            asp = bw / bh
-            zm = sp_["zoom"]
-            crop = (f"crop=w='min(iw,ih*{asp:.6f})/{zm:.4f}':h='min(ih,iw/{asp:.6f})/{zm:.4f}'"
-                    f":x='clip({sp_['cx']:.4f}*iw-ow/2,0,iw-ow)':y='clip({sp_['cy']:.4f}*ih-oh/2,0,ih-oh)'")
-            fc = (f"color=c=black:s={W}x{H}:r={FPS}[bg];"
-                  f"[0:v]{crop},scale={bw}:{bh},fps={FPS},format=yuv420p[pip];"
-                  f"[bg][pip]overlay={bx}:{by}[base];"
-                  f"[1:v]scale={W}:{H},fps={FPS}[ov];"
-                  f"[base][ov]overlay=0:0:format=auto,"
-                  f"tpad=stop_mode=clone:stop_duration=1,format=yuv420p[v]")
-            cmd = ["ffmpeg", "-y", "-ss", f"{a:.4f}", "-i", master,
-                   "-ss", f"{off:.4f}", "-i", sp_["file"],
-                   "-filter_complex", fc, "-map", "[v]", "-frames:v", str(n), "-an",
-                   *VSEG, "-pix_fmt", "yuv420p", seg]
-        elif cut:
-            off = a - cut["in"]
-            kind = f"cutaway:{cut['id']} @+{off:.2f}s"
-            cmd = ["ffmpeg", "-y", "-ss", f"{off:.4f}", "-i", cut["file"],
-                   "-vf", common_vf, "-frames:v", str(n), "-an",
-                   *VSEG, "-pix_fmt", "yuv420p", seg]
-        elif ov:
-            off = a - ov["in"]
-            kind = f"master+overlay:{ov['id']} @+{off:.2f}s"
-            fc = (f"[0:v]scale={W}:{H},fps={FPS},format=yuv420p[bg];"
-                  f"[1:v]scale={W}:{H},fps={FPS}[ov];"
-                  f"[bg][ov]overlay=0:0:format=auto,"
-                  f"tpad=stop_mode=clone:stop_duration=1,format=yuv420p[v]")
-            cmd = ["ffmpeg", "-y", "-ss", f"{a:.4f}", "-i", master,
-                   "-ss", f"{off:.4f}", "-i", ov["file"],
-                   "-filter_complex", fc, "-map", "[v]", "-frames:v", str(n), "-an",
-                   *VSEG, "-pix_fmt", "yuv420p", seg]
+        win = windows.get(round(a * FPS))
+        if win and round(b * FPS) == win[0] + win[1]:
+            kind = "TRANSITION " + render_transition(*win, a, n, seg)
+            transitions_done.append((win[0] / FPS, win[2]))
         else:
-            kind = "master"
-            cmd = ["ffmpeg", "-y", "-ss", f"{a:.4f}", "-i", master,
-                   "-vf", common_vf, "-frames:v", str(n), "-an",
-                   *VSEG, "-pix_fmt", "yuv420p", seg]
-
+            kind = render_state(state_at((a + b) / 2), a, n, seg, VSEG)
         print(f"  [{a:6.2f}-{b:6.2f}] {n:4d}f  {kind}")
-        run(cmd)
         seg_files.append(seg)
+    if transitions_done:
+        # handy for the SFX pass: a whoosh lands on the join, not the window start
+        print("transitions (join time, for SFX): " +
+              ", ".join(f"{t:.2f}s {tr['name']}" for t, tr in transitions_done))
 
     # concat (re-encode) + mux audio. Without inserts the audio is master 0..END;
     # with inserts it is master[0..t1] + insert1 audio + master[t1..t2] + ... so

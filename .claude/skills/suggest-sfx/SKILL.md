@@ -21,7 +21,9 @@ Sound taste is a brand contract — read **`brand.md` §10** every time. The hou
 - **`brand.md` §10 (Sound design)** — the SFX taste contract: subtlety, density, palette, levels, sync,
   signature motifs, source policy. Non-negotiable.
 - **`videos/video-N/work/timeline.json`** — the shots and their master spans + `type` (cutaway/overlay). The
-  cut-in/out boundaries are your transition (whoosh) candidates.
+  cut-in/out boundaries are your transition (whoosh) candidates. A shot with `transition_in`/`transition_out`
+  (or a timeline `transitions.default`) has a visible transition there: land its whoosh ON the join time
+  (bake.py prints them as "transitions (join time, for SFX)"), not at the window's start.
 - **`videos/video-N/work/edited-transcript.json`** — word-level times (ms) in the MASTER timeline. Sync cues to
   these words (a pop on "boom", a chime on "free").
 - **The shot sources** `remotion/src/shots/video-N/*.tsx` — the INTERNAL animation frames are where the

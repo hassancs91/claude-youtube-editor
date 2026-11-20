@@ -97,7 +97,8 @@ Nothing here is a subscription to me. These are your own keys, in your own `.env
 
 Open source, and I'm keeping it updated:
 
-- [ ] **Transitions** — a proper transition library between beats
+- [x] **Transitions** — a proper transition library between beats (`transition_in`/`transition_out`
+  in `timeline.json`: fade, dip, blur, zoom, slide, wipe, circle; rendered by `tools/bake.py`)
 - [ ] **Effects** — zoom/punch-in, highlight, spotlight passes
 - [ ] **Filters** — grade/look presets that respect the brand contract
 - [x] A cuts.json time-remapper (so `edited-transcript.json` doesn't need a second transcription pass)
