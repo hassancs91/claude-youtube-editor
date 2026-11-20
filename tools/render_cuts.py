@@ -99,22 +99,22 @@ def main() -> None:
     style = data["styles"][args.style]
     probe = AudioProbe(project)
 
-    jobs = []  # (source file, (start, end))
+    jobs = []  # (clip id, source file, (start, end))
     by_id = {c["id"]: c for c in data["clips"]}
     for cid in data["clip_order"]:
         clip = by_id[cid]
         words = load_words(project, cid)
         for seg in plan_clip(cid, active_keeps(clip), words, style, probe, clip.get("cuts")):
-            jobs.append((project / clip["file"], seg))
+            jobs.append((cid, project / clip["file"], seg))
 
-    total = sum(e - s for _, (s, e) in jobs)
+    total = sum(e - s for _, _, (s, e) in jobs)
     print(f"{args.style}/{args.mode}: {len(jobs)} segments, output ~ {total / 60:.1f} min")
 
     seg_dir = project / "work" / "render" / f"{args.style}-{args.mode}"
     seg_dir.mkdir(parents=True, exist_ok=True)
     outs = [seg_dir / f"seg_{i:03d}.mp4" for i in range(len(jobs))]
 
-    todo = [(src, seg, out) for (src, seg), out in zip(jobs, outs) if not is_finalized(out)]
+    todo = [(src, seg, out) for (_cid, src, seg), out in zip(jobs, outs) if not is_finalized(out)]
     if len(todo) < len(jobs):
         print(f"  resuming: {len(jobs) - len(todo)} segments already encoded, {len(todo)} to go")
     with ThreadPoolExecutor(max_workers=3) as pool:
@@ -150,12 +150,13 @@ def main() -> None:
 
     # build the audio to the segments' ACTUAL video lengths (sample-exact, no drift)
     print("building drift-free audio track...")
-    wavs = []
-    for (src, (start, _end)), out in zip(jobs, outs):
+    wavs, segmap = [], []
+    for (cid, src, (start, _end)), out in zip(jobs, outs):
         dur = video_duration(out)
         wav = out.with_suffix(".wav")
         render_audio_segment(src, start, dur, wav)
         wavs.append(wav)
+        segmap.append({"clip": cid, "src_s": round(start, 6), "dur": round(dur, 6)})
     alist = seg_dir / "alist.txt"
     alist.write_text("\n".join(f"file '{w.as_posix()}'" for w in wavs), encoding="utf-8")
     audio_concat = seg_dir / "audio.wav"
@@ -181,6 +182,14 @@ def main() -> None:
                     "-c:a", "aac", "-b:a", AUDIO_BITRATE[args.mode],
                     str(out_path)], check=True)
     print(f"wrote {out_path}")
+
+    # segment map: where each raw span landed in this render, using the segments' ACTUAL
+    # encoded lengths (the same lengths the audio was cut to). remap_transcript.py turns it
+    # + the raw transcripts into edited-transcript.json with no second transcription pass.
+    seg_path = project / "work" / "analysis" / f"segmap-{args.style}.json"
+    seg_path.write_text(json.dumps({"style": args.style, "mode": args.mode, "master": out_name,
+                                    "segments": segmap}, indent=1), encoding="utf-8")
+    print(f"wrote {seg_path}")
 
 
 if __name__ == "__main__":

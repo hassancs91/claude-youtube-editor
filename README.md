@@ -100,7 +100,8 @@ Open source, and I'm keeping it updated:
 - [ ] **Transitions** — a proper transition library between beats
 - [ ] **Effects** — zoom/punch-in, highlight, spotlight passes
 - [ ] **Filters** — grade/look presets that respect the brand contract
-- [ ] A cuts.json time-remapper (so `edited-transcript.json` doesn't need a second transcription pass)
+- [x] A cuts.json time-remapper (so `edited-transcript.json` doesn't need a second transcription pass)
+  — `tools/remap_transcript.py`
 
 ⭐ **Star the repo** if you want to see where it goes — that's genuinely how I decide what to build next.
 Issues and PRs welcome. Tell me which step you want to go deep on.
@@ -121,7 +122,7 @@ Being straight with you about the scope:
 
 ```
 .claude/skills/   the 8 skills (this is where the editor actually lives)
-tools/            Python: transcribe, cutlib, render_cuts, verify_cut, clean_voice, bake,
+tools/            Python: transcribe, cutlib, render_cuts, remap_transcript, verify_cut, clean_voice, bake,
                   gen_sfx/mix_sfx, gen_music/mix_music, gen_thumbnail, yt_stats, yt_upload,
                   capture_web + the cut-editor UI (editor/) + rnnoise models
 remotion/         the Remotion project — shared kits in src/lib/, src/shots/<project>/ one folder
