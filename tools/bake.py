@@ -31,7 +31,10 @@ and optionally a timeline-wide default for cutaway/split joins:
 transition_in wins. Types (default seconds): fade 0.30 · dip 0.40 (out to dip_color,
 in from it) · blur 0.30 · zoom 0.35 · slide-left/right/up/down 0.35 ·
 wipe-left/right/up/down 0.35 · circle 0.45 · "xfade:<name>" for any ffmpeg xfade
-transition. The window is CENTERED on the join and frame-exact, so no beat moves
+transition · "hf:<shader>" 0.60 for a HyperFrames WebGL shader (whip-pan, light-leak,
+cinematic-zoom, sdf-iris, domain-warp, cross-warp-morph, flash-through-white, glitch,
+... see tools/hf_transition.py; needs Node >= 22, glows use the brand accent or the
+transitions block's "accent"). The window is CENTERED on the join and frame-exact, so no beat moves
 and the audio is untouched: the outgoing side holds its last frame for the second
 half, the incoming side holds its first frame for the first half. A window is
 clamped to half of each neighbouring segment. Overlays fade themselves in their
@@ -50,6 +53,8 @@ import os
 import subprocess
 import sys
 import shutil
+
+import hf_transition
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -76,7 +81,7 @@ LOSSLESS = ["-c:v", "libx264", "-qp", "0", "-preset", "ultrafast"]  # transition
 
 
 def parse_transition(spec, where, dip_color):
-    """A transition spec -> {name, kind, dur, color}, or None for a hard cut."""
+    """A transition spec -> {name, kind, dur, color[, shader]}, or None for a hard cut."""
     if spec is None or spec == "cut":
         return None
     if isinstance(spec, str):
@@ -84,15 +89,22 @@ def parse_transition(spec, where, dip_color):
     name = spec.get("type", "cut")
     if name == "cut":
         return None
-    if name.startswith("xfade:"):
+    shader = None
+    if name.startswith("hf:"):
+        shader = name[len("hf:"):]
+        if shader not in hf_transition.SHADERS:
+            raise SystemExit(f"unknown HyperFrames shader '{shader}' on {where}. "
+                             f"One of: {', '.join('hf:' + x for x in hf_transition.SHADERS)}")
+        kind, dur = "hf", hf_transition.DEFAULT_DUR
+    elif name.startswith("xfade:"):
         kind, dur = name[len("xfade:"):], 0.30
     elif name in TRANSITIONS:
         kind, dur = TRANSITIONS[name]
     else:
         raise SystemExit(f"unknown transition '{name}' on {where}. Use one of: cut, "
-                         f"{', '.join(TRANSITIONS)}, or xfade:<ffmpeg xfade name>")
+                         f"{', '.join(TRANSITIONS)}, hf:<shader>, or xfade:<ffmpeg xfade name>")
     return {"name": name, "kind": kind, "dur": float(spec.get("dur_s", dur)),
-            "color": spec.get("color", dip_color)}
+            "color": spec.get("color", dip_color), "shader": shader}
 
 
 def run(cmd):
@@ -309,6 +321,16 @@ def main():
         la = render_state(before, a, n, sa, LOSSLESS)
         lb = render_state(after, a, n, sb, LOSSLESS)
         norm = f"fps={FPS},settb=AVTB,format=yuv420p"
+        if tr["kind"] == "hf":
+            hf_out = os.path.join(scratch, f"{os.path.basename(seg)}.hf.mp4")
+            hf_transition.render(sa, sb, hf_out, tr["shader"], FPS, n, W, H,
+                                 accent=tcfg.get("accent"), bg=tcfg.get("hf_bg", "#000000"))
+            # back onto the pipeline's encoder, exactly n frames
+            run(["ffmpeg", "-y", "-i", hf_out, "-vf", f"scale={W}:{H},{norm},tpad=stop_mode=clone:stop_duration=1",
+                 "-frames:v", str(n), "-an", *VSEG, "-pix_fmt", "yuv420p", seg])
+            for x in (sa, sb, hf_out):
+                os.remove(x)
+            return f"{tr['name']} {n / FPS:.2f}s  {la}  ->  {lb}"
         if tr["kind"] == "dip":
             fc = (f"[0:v]{norm},trim=end_frame={h},fade=t=out:s=0:n={h}:color={tr['color']}[a];"
                   f"[1:v]{norm},trim=start_frame={h},setpts=PTS-STARTPTS,fade=t=in:s=0:n={n - h}:color={tr['color']}[b];"

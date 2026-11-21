@@ -81,7 +81,9 @@ Translated to video (Remotion, 60fps):
   — a transition has to mark something (a new section, entering/leaving a concept cutaway, a reveal).
   The everyday set is `fade` (0.25–0.35s, cutaway in/out) and `dip` to `#0d1117` (0.4–0.5s, section
   changes). `blur` for a softer cutaway entry. `slide`/`wipe`/`zoom`/`circle` are louder: at most a
-  section-change motif, used the same way every time. **One transition family per video**, always
+  section-change motif, used the same way every time. HyperFrames shaders (`hf:*`) are the loudest
+  tier: on-brand only as the hook-beat exception or a once-per-video signature (`hf:cross-warp-morph`
+  and `hf:sdf-iris` are the calmest; `hf:glitch`, `hf:ridged-burn`, `hf:ripple-waves` are off-brand here). **One transition family per video**, always
   short (0.2–0.5s), never on a shot whose own camera is already moving, and never across a punchline
   (cut back to the face hard). A transition that gets a sound gets `whoosh-soft` on the join (§10).
 
